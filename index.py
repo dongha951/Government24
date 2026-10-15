@@ -101,28 +101,32 @@ def make_embed(title, desc):
     )
 
 # ==========================================
-# 메인 메뉴 버튼 — 사진과 똑같이
+# ✅ 메인 메뉴 — 깔끔한 박스 스타일
 # ==========================================
 class MainMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        # 첫 번째 줄
         self.add_item(discord.ui.Button(
             label="정보",
             style=discord.ButtonStyle.blurple,
             emoji="👤",
-            custom_id="myinfo"
+            custom_id="myinfo",
+            row=0
         ))
         self.add_item(discord.ui.Button(
             label="제작",
             style=discord.ButtonStyle.green,
             emoji="📜",
-            custom_id="create_id"
+            custom_id="create_id",
+            row=0
         ))
         self.add_item(discord.ui.Button(
             label="가입",
             style=discord.ButtonStyle.grey,
             emoji="🪪",
-            custom_id="join"
+            custom_id="join",
+            row=0
         ))
 
 # ==========================================
@@ -292,31 +296,30 @@ async def on_interaction(inter: discord.Interaction):
 async def on_ready():
     print("")
     print("─────────────────────────────────────────────────────")
-    print(f"✅ HolyGov24 실행: {bot.user}")
+    print(f"✅ Gov24 실행: {bot.user}")
     print(f"🔗 초대 링크: https://discord.com/oauth2/authorize?client_id={bot.user.id}&permissions=8&scope=bot")
     print(f"🏠 서버: {len(bot.guilds)}개")
     print("─────────────────────────────────────────────────────")
 
+    tree.clear_commands()
+
+    # 메뉴 — 제목 간단하게 수정
     @app_commands.command(name="메뉴", description="메인 메뉴를 엽니다")
     async def menu_cmd(inter: discord.Interaction):
         embed = discord.Embed(
-            title="[HolyGov24] 24H 무료 QR검증 서비스",
+            title="[Gov24] 24H QR검증 서비스",
             description="""
-사용
-#📋 | 이용방법
-
-질문
-#❓ | 도움말
-
-문의
-#💬 | 문의하기
+사용  │ 이용방법
+질문  │ 도움말
+문의  │ 문의하기
             """,
             color=0x1a1b1e
         )
+        embed.set_footer(text="Gov24")
         await inter.response.send_message(embed=embed, view=MainMenuView(), ephemeral=False)
 
+    # 생성
     @app_commands.command(name="생성", description="라이센스 키 생성 (관리자 전용)")
-    @app_commands.checks.has_permissions(administrator=True)
     async def create_cmd(inter: discord.Interaction, 개수: int, 기간: int):
         if inter.user.id not in admin_id:
             return await inter.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
@@ -335,8 +338,8 @@ async def on_ready():
             ephemeral=True
         )
 
+    # 변경
     @app_commands.command(name="변경", description="유저 정보 수정 (관리자 전용)")
-    @app_commands.checks.has_permissions(administrator=True)
     async def edit_cmd(inter: discord.Interaction, 유저: discord.User, 항목: str, 값: str):
         if inter.user.id not in admin_id:
             return await inter.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
@@ -367,13 +370,19 @@ async def on_ready():
         con.close()
         await inter.response.send_message(embed=make_embed("✅ 변경 완료", f"{항목}이(가) 변경되었습니다."), ephemeral=True)
 
-    # 명령어 등록
     tree.add_command(menu_cmd)
+
+    async def is_admin(inter: discord.Interaction) -> bool:
+        return inter.user.id in admin_id
+
+    create_cmd.checks.append(is_admin)
     tree.add_command(create_cmd)
+
+    edit_cmd.checks.append(is_admin)
     tree.add_command(edit_cmd)
 
     await tree.sync()
-    await bot.change_presence(activity=discord.Game("위조민증 제작"), status=discord.Status.online)
+    await bot.change_presence(activity=discord.Game("Gov24 서비스"), status=discord.Status.online)
 
 # ==========================================
 # 실행

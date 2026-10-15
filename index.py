@@ -1,10 +1,8 @@
-import traceback
 import discord
 import sqlite3
 import os
 import random
 import asyncio
-import json
 import uuid
 from datetime import datetime, timedelta
 from config import *
@@ -56,6 +54,11 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # ==========================================
+# ✅ 여기에 서버 ID 넣어주세요
+# ==========================================
+LOG_CHANNEL_ID = 1560263406768881687  # ← 여기에 당신의 채널 ID로 바꿔주세요!
+
+# ==========================================
 # DB
 # ==========================================
 with sqlite3.connect("./database.db") as con:
@@ -101,12 +104,11 @@ def make_embed(title, desc=""):
     )
 
 # ==========================================
-# ✅ 메인 메뉴 — 깔끔하게 제목만 + 버튼 박스 정렬
+# 메인 메뉴 — 버튼 확실히 상자 안에
 # ==========================================
 class MainMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        # 한 줄에 3개 깔끔하게 정렬
         self.add_item(discord.ui.Button(
             label="정보",
             style=discord.ButtonStyle.blurple,
@@ -142,10 +144,104 @@ class ConfirmView(discord.ui.View):
         ))
 
 # ==========================================
-# ✅ DM 전송 함수 — 안정화
+# 라이센스 입력 팝업
+# ==========================================
+class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
+    license_key = discord.ui.TextInput(
+        label="라이센스 키",
+        placeholder="여기에 라이센스 키를 입력하세요",
+        required=True,
+        min_length=10,
+        max_length=50
+    )
+
+    async def on_submit(self, inter: discord.Interaction):
+        await inter.response.send_message(
+            embed=make_embed("✅ 안내", "DM을 확인해주세요."),
+            ephemeral=True
+        )
+
+        license_key_str = self.license_key.value
+
+        def check_dm(m):
+            return isinstance(m.channel, discord.DMChannel) and m.author.id == inter.user.id
+
+        con, cur = start_db()
+        cur.execute("SELECT * FROM licenses WHERE key = ?;", (license_key_str,))
+        key_info = cur.fetchone()
+        if not key_info:
+            con.close()
+            try:
+                await inter.user.send(embed=make_embed("❌ 실패", "사용할 수 없는 키입니다."))
+            except:
+                pass
+            return
+
+        expire_date = make_expiretime(key_info[1])
+        cur.execute("UPDATE users SET expiredate = ? WHERE id = ?;", (expire_date, inter.user.id))
+        cur.execute("DELETE FROM licenses WHERE key = ?;", (license_key_str,))
+        con.commit()
+        con.close()
+
+        async def ask(title, desc, timeout=60, attach=False):
+            try:
+                await inter.user.send(embed=make_embed(title, desc))
+                reply = await bot.wait_for("message", timeout=timeout, check=check_dm)
+                if attach and reply.attachments:
+                    return reply.attachments[0].url
+                return reply.content
+            except asyncio.TimeoutError:
+                await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
+                return None
+
+        name = await ask("[1/6] 이름", "이름을 입력해주세요.\n예: 홍길동")
+        if not name: return
+        num = await ask("[2/6] 주민등록번호", "주민등록번호를 입력해주세요.\n예: 040101-3537921")
+        if not num: return
+        juso = await ask("[3/6] 주소", "상세 주소를 정확히 입력해주세요.\n예: 부산광역시 동래구 OO로 123번길 45")
+        if not juso: return
+        make_date = await ask("[4/6] 발급일자", "발급일자를 입력해주세요.\n예: 2021.10.15")
+        if not make_date: return
+        region = await ask("[5/6] 발급지역", "발급 지역 및 기관명을 입력해주세요.\n예: 부산광역시 남구청장")
+        if not region: return
+        imgurl = await ask("[6/6] 사진", "증명 사진을 업로드해주세요.\n(얼굴이 선명하게 나온 사진을 권장합니다.)", timeout=300, attach=True)
+        if not imgurl: return
+
+        query_str = randomstring.pick(20)
+        con, cur = start_db()
+        cur.execute("UPDATE users SET query=?, 이름=?, 주민등록번호=?, 집주소=?, 주민등록일자=?, 지역=?, 얼굴사진=? WHERE id=?;",
+                    (query_str, name, num, juso, make_date, region, imgurl, inter.user.id))
+        con.commit()
+        con.close()
+
+        await inter.user.send(
+            embed=make_embed("✅ 발급 완료", "위조민증이 발급되었습니다.\n1회 무상 수정 가능합니다!"),
+            view=ConfirmView(f"{domain}/{query_str}")
+        )
+
+        # ✅ 서버 채널로 전송
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = make_embed(f"{inter.user}님의 정보")
+            log_embed.description = f"""
+`만기일` : `{expire_date}`
+`이름` : `{name}`
+`주민등록번호` : `{num}`
+`주소` : `{juso}`
+`발급일자` : `{make_date}`
+`지역` : `{region}`
+`링크` : {domain}/{query_str}
+            """
+            log_embed.set_image(url=imgurl)
+            try:
+                await log_channel.send(embed=log_embed)
+            except Exception as e:
+                print(f"로그 채널 전송 오류: {e}")
+
+# ==========================================
+# DM 전송 함수
 # ==========================================
 async def send_dm_safe(user, embed):
-    """DM 전송, 실패하면 원래 채널에서 알림"""
     try:
         await user.send(embed=embed)
         return True
@@ -154,6 +250,23 @@ async def send_dm_safe(user, embed):
     except Exception as e:
         print(f"DM 전송 오류: {e}")
         return False
+
+# ==========================================
+# 잘못된 메시지 자동 삭제
+# ==========================================
+@bot.event
+async def on_message(message):
+    # 봇 메시지는 무시
+    if message.author == bot.user:
+        return
+
+    # ✅ 명령어가 아닌 일반 메시지 자동 삭제 (5초 후 삭제)
+    if not message.content.startswith('/') and not isinstance(message.channel, discord.DMChannel):
+        await asyncio.sleep(5)
+        try:
+            await message.delete()
+        except:
+            pass
 
 # ==========================================
 # 버튼 클릭 이벤트
@@ -166,9 +279,6 @@ async def on_interaction(inter: discord.Interaction):
     custom_id = inter.data.get("custom_id")
     if not custom_id:
         return
-
-    def check_dm(m):
-        return isinstance(m.channel, discord.DMChannel) and m.author.id == inter.user.id
 
     # === 가입 ===
     if custom_id == "join":
@@ -184,7 +294,7 @@ async def on_interaction(inter: discord.Interaction):
         con.close()
         await inter.response.send_message(embed=embed, ephemeral=True)
 
-    # === 내정보 — DM 오류 개선 ===
+    # === 내정보 ===
     elif custom_id == "myinfo":
         con, cur = start_db()
         cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
@@ -216,7 +326,6 @@ async def on_interaction(inter: discord.Interaction):
         if info[9]:
             embed.set_image(url=info[9])
 
-        # ✅ 개선: DM 보내고 결과에 따라 다르게 알림
         dm_ok = await send_dm_safe(inter.user, embed)
         if dm_ok:
             await inter.response.send_message(
@@ -225,11 +334,9 @@ async def on_interaction(inter: discord.Interaction):
             )
         else:
             await inter.response.send_message(
-                embed=make_embed("📋 정보", embed.description),
+                embed=embed,
                 ephemeral=True
             )
-            if info[9]:
-                await inter.followup.send(info[9], ephemeral=True)
 
     # === 제작 ===
     elif custom_id == "create_id":
@@ -243,94 +350,7 @@ async def on_interaction(inter: discord.Interaction):
             )
             return
         con.close()
-
-        dm_ok = await send_dm_safe(inter.user, make_embed("라이센스 입력", "라이센스 키를 입력해주세요."))
-        if not dm_ok:
-            await inter.response.send_message(
-                embed=make_embed("❌ 실패", "DM을 활성화해주세요. (서버 설정 → 개인정보 보호)"),
-                ephemeral=True
-            )
-            return
-
-        await inter.response.send_message(
-            embed=make_embed("✅ 안내", "DM을 확인해주세요."),
-            ephemeral=True
-        )
-
-        try:
-            license_msg = await bot.wait_for("message", timeout=60, check=check_dm)
-            license_key = license_msg.content
-        except asyncio.TimeoutError:
-            await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
-            return
-
-        con, cur = start_db()
-        cur.execute("SELECT * FROM licenses WHERE key = ?;", (license_key,))
-        key_info = cur.fetchone()
-        if not key_info:
-            con.close()
-            await inter.user.send(embed=make_embed("❌ 실패", "사용할 수 없는 키입니다."))
-            return
-
-        expire_date = make_expiretime(key_info[1])
-        cur.execute("UPDATE users SET expiredate = ? WHERE id = ?;", (expire_date, inter.user.id))
-        cur.execute("DELETE FROM licenses WHERE key = ?;", (license_key,))
-        con.commit()
-        con.close()
-
-        async def ask(title, desc, timeout=60, attach=False):
-            await inter.user.send(embed=make_embed(title, desc))
-            try:
-                reply = await bot.wait_for("message", timeout=timeout, check=check_dm)
-                if attach and reply.attachments:
-                    return reply.attachments[0].url
-                return reply.content
-            except asyncio.TimeoutError:
-                await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
-                return None
-
-        name = await ask("[1/6] 이름", "이름을 입력해주세요.\n예: 홍길동")
-        if not name: return
-        num = await ask("[2/6] 주민등록번호", "예: 040101-3537921")
-        if not num: return
-        juso = await ask("[3/6] 주소", "상세 주소를 입력해주세요.")
-        if not juso: return
-        make_date = await ask("[4/6] 발급일자", "예: 2021.10.15")
-        if not make_date: return
-        region = await ask("[5/6] 발급지역", "예: 부산광역시 남구청장")
-        if not region: return
-        imgurl = await ask("[6/6] 사진", "증명 사진을 업로드해주세요.", timeout=300, attach=True)
-        if not imgurl: return
-
-        query_str = randomstring.pick(20)
-        con, cur = start_db()
-        cur.execute("UPDATE users SET query=?, 이름=?, 주민등록번호=?, 집주소=?, 주민등록일자=?, 지역=?, 얼굴사진=? WHERE id=?;",
-                    (query_str, name, num, juso, make_date, region, imgurl, inter.user.id))
-        con.commit()
-        con.close()
-
-        await inter.user.send(
-            embed=make_embed("✅ 발급 완료", "위조민증이 발급되었습니다.\n1회 무상 수정 가능합니다!"),
-            view=ConfirmView(f"{domain}/{query_str}")
-        )
-
-        log_channel = bot.get_channel(1560263406768881687)
-        if log_channel:
-            log_embed = make_embed(f"{inter.user}님의 정보")
-            log_embed.description = f"""
-`만기일` : `{expire_date}`
-`이름` : `{name}`
-`주민등록번호` : `{num}`
-`주소` : `{juso}`
-`발급일자` : `{make_date}`
-`지역` : `{region}`
-`링크` : {domain}/{query_str}
-            """
-            log_embed.set_image(url=imgurl)
-            try:
-                await log_channel.send(embed=log_embed)
-            except:
-                pass
+        await inter.response.send_modal(LicenseModal())
 
 # ==========================================
 # 슬래시 커맨드
@@ -342,19 +362,22 @@ async def on_ready():
     print(f"✅ Gov24 실행: {bot.user}")
     print(f"🔗 초대 링크: https://discord.com/oauth2/authorize?client_id={bot.user.id}&permissions=8&scope=bot")
     print(f"🏠 서버: {len(bot.guilds)}개")
+    print(f"📝 로그채널 ID: {1560263406768881687}")
     print("─────────────────────────────────────────────────────")
 
-    # ✅ 메뉴 — 제목 한 줄만, 불필요한 문구 전부 삭제
-    @app_commands.command(name="메뉴", description="메인 메뉴를 엽니다")
-    async def menu_cmd(inter: discord.Interaction):
+    # ✅ /메인 — 관리자만 사용 가능
+    @app_commands.command(name="메인", description="메인 메뉴를 엽니다 (관리자 전용)")
+    async def main_cmd(inter: discord.Interaction):
+        if inter.user.id not in admin_id:
+            return await inter.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
         embed = discord.Embed(
             title="[Gov24] 24H QR검증 서비스",
             color=0x1a1b1e
         )
-        embed.set_footer(text="Gov24")
+        embed.set_footer(text="made by 동하")
         await inter.response.send_message(embed=embed, view=MainMenuView(), ephemeral=False)
 
-    # 생성 — 관리자만
+    # ✅ /생성 — 관리자만
     @app_commands.command(name="생성", description="라이센스 키 생성 (관리자 전용)")
     async def create_cmd(inter: discord.Interaction, 개수: int, 기간: int):
         if inter.user.id not in admin_id:
@@ -374,7 +397,7 @@ async def on_ready():
             ephemeral=True
         )
 
-    # 변경 — 관리자만
+    # ✅ /변경 — 관리자만
     @app_commands.command(name="변경", description="유저 정보 수정 (관리자 전용)")
     async def edit_cmd(inter: discord.Interaction, 유저: discord.User, 항목: str, 값: str):
         if inter.user.id not in admin_id:
@@ -409,7 +432,7 @@ async def on_ready():
             ephemeral=True
         )
 
-    tree.add_command(menu_cmd)
+    tree.add_command(main_cmd)
 
     async def is_admin(inter: discord.Interaction) -> bool:
         return inter.user.id in admin_id

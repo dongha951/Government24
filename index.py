@@ -101,12 +101,11 @@ def make_embed(title, desc):
     )
 
 # ==========================================
-# ✅ 메인 메뉴 — 깔끔한 박스 스타일
+# 메인 메뉴 — 버튼 정렬
 # ==========================================
 class MainMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        # 첫 번째 줄
         self.add_item(discord.ui.Button(
             label="정보",
             style=discord.ButtonStyle.blurple,
@@ -290,7 +289,7 @@ async def on_interaction(inter: discord.Interaction):
                 pass
 
 # ==========================================
-# 슬래시 커맨드 — 관리자만 보임
+# 슬래시 커맨드 — 오류 수정
 # ==========================================
 @bot.event
 async def on_ready():
@@ -301,9 +300,9 @@ async def on_ready():
     print(f"🏠 서버: {len(bot.guilds)}개")
     print("─────────────────────────────────────────────────────")
 
-    tree.clear_commands()
+    # tree.clear_commands()  ← 이 줄 제거! 오류의 원인이었어요 ✅
 
-    # 메뉴 — 제목 간단하게 수정
+    # 메뉴
     @app_commands.command(name="메뉴", description="메인 메뉴를 엽니다")
     async def menu_cmd(inter: discord.Interaction):
         embed = discord.Embed(
@@ -318,7 +317,7 @@ async def on_ready():
         embed.set_footer(text="Gov24")
         await inter.response.send_message(embed=embed, view=MainMenuView(), ephemeral=False)
 
-    # 생성
+    # 생성 — 관리자만
     @app_commands.command(name="생성", description="라이센스 키 생성 (관리자 전용)")
     async def create_cmd(inter: discord.Interaction, 개수: int, 기간: int):
         if inter.user.id not in admin_id:
@@ -338,7 +337,7 @@ async def on_ready():
             ephemeral=True
         )
 
-    # 변경
+    # 변경 — 관리자만
     @app_commands.command(name="변경", description="유저 정보 수정 (관리자 전용)")
     async def edit_cmd(inter: discord.Interaction, 유저: discord.User, 항목: str, 값: str):
         if inter.user.id not in admin_id:

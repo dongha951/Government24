@@ -157,6 +157,27 @@ class ConfirmView(discord.ui.View):
         ))
 
 # ==========================================
+# 키 복사 버튼 뷰
+# ==========================================
+class KeyCopyView(discord.ui.View):
+    def __init__(self, key_text: str):
+        super().__init__(timeout=300)
+        self.key_text = key_text
+        self.add_item(discord.ui.Button(
+            label="복사",
+            style=discord.ButtonStyle.secondary,
+            emoji="📋",
+            custom_id="copy_key"
+        ))
+
+    @discord.ui.button(label="복사", style=discord.ButtonStyle.secondary, emoji="📋")
+    async def copy_key_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+        await inter.response.send_message(
+            f"```\n{self.key_text}\n```",
+            ephemeral=True
+        )
+
+# ==========================================
 # 라이센스 입력 팝업
 # ==========================================
 class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
@@ -236,18 +257,19 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
             view=ConfirmView(f"{domain}/{query_str}")
         )
 
+        # ✅ 키를 사용한 사람(제작자) 정보 기록
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
-            log_embed = make_embed(f"{inter.user}님 제작 완료")
+            log_embed = make_embed("🔑 라이센스 키 사용")
             log_embed.description = (
+                f"`사용자` : `{inter.user}`\n"
+                f"`사용자ID` : `{inter.user.id}`\n"
                 f"`이름` : `{name}`\n"
                 f"`주민등록번호` : `{num}`\n"
-                f"`주소` : `{juso}`\n"
-                f"`발급일자` : `{make_date}`\n"
-                f"`발급지역` : `{region}`\n"
-                f"`제작 링크` : {domain}/{query_str}"
+                f"`제작 링크` : {domain}/{query_str}\n"
+                f"`키` : `{license_key_str}`"
             )
-            log_embed.set_image(url=imgurl)
+            log_embed.timestamp = datetime.now()
             try:
                 await log_channel.send(embed=log_embed)
             except Exception as e:
@@ -424,7 +446,7 @@ async def on_ready():
         plain_keys = []
         for _ in range(개수):
             key = str(uuid.uuid4())
-            keys.append(f"`{key}`")
+            keys.append(key)
             plain_keys.append(key)
             cur.execute("INSERT INTO licenses VALUES (?, ?);", (key, 기간))
         con.commit()
@@ -432,12 +454,12 @@ async def on_ready():
 
         all_keys_text = "\n".join(plain_keys)
 
+        # ✅ 키 생성 로그 (생성자 정보만 기록)
         license_log_channel = bot.get_channel(LICENSE_LOG_CHANNEL_ID)
         if license_log_channel:
             log_embed = make_embed("🔑 라이센스 키 생성")
             log_embed.description = (
                 f"`생성자` : `{inter.user}`\n"
-                f"`사용자ID` : `{inter.user.id}`\n"
                 f"`개수` : `{개수}개`\n"
                 f"`기간` : `{기간}일`\n"
                 f"`키` :\n```\n{all_keys_text}\n```"
@@ -448,18 +470,23 @@ async def on_ready():
             except Exception as e:
                 print(f"라이센스 로그 전송 오류: {e}")
 
+        # ✅ 개별 키마다 복사 버튼 함께 표시
+        result_views = []
+        for k in keys:
+            result_views.append(f"`{k}`")
+        
         class CopyAllView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=300)
             @discord.ui.button(label="📋 전체 키 복사", style=discord.ButtonStyle.primary)
             async def copy_all_btn(self, btn_inter: discord.Interaction, button: discord.ui.Button):
                 await btn_inter.response.send_message(
-                    f"```\n{all_keys_text}\n```\n✅ 위 내용을 복사해서 사용하세요!",
+                    f"```\n{all_keys_text}\n```",
                     ephemeral=True
                 )
 
         await inter.response.send_message(
-            embed=make_embed("✅ 생성 완료", f"{개수}개의 키:\n\n{chr(10).join(keys)}\n\n📋 아래 버튼을 누르면 전체 키가 표시됩니다 → 복사해서 사용하세요"),
+            embed=make_embed("✅ 생성 완료", f"{개수}개의 키가 생성되었습니다."),
             view=CopyAllView(),
             ephemeral=True
         )

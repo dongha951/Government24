@@ -56,7 +56,7 @@ tree = app_commands.CommandTree(bot)
 # ==========================================
 # ✅ 채널 ID 넣는 곳
 # ==========================================
-LOG_CHANNEL_ID = 1560263406768881687   # ← 제작 완료 시 정보 전송될 채널
+LOG_CHANNEL_ID = 1560263406768881687
 
 # ==========================================
 # DB
@@ -104,6 +104,18 @@ def make_embed(title, desc=""):
     )
 
 # ==========================================
+# 주소찾기 링크 버튼
+# ==========================================
+class JusoLinkView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(
+            label="👉 주소찾기 바로가기",
+            style=discord.ButtonStyle.link,
+            url="https://www.juso.go.kr/"
+        ))
+
+# ==========================================
 # 메인 메뉴
 # ==========================================
 class MainMenuView(discord.ui.View):
@@ -132,7 +144,7 @@ class MainMenuView(discord.ui.View):
         ))
 
 # ==========================================
-# 확인 버튼 — 제작 링크는 삭제되지 않음
+# 확인 버튼
 # ==========================================
 class ConfirmView(discord.ui.View):
     def __init__(self, url: str):
@@ -183,10 +195,13 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         con.commit()
         con.close()
 
-        # ✅ 제작 시간초과 30분
-        async def ask(title, desc, timeout=1800, attach=False):
+        async def ask(title, desc, timeout=1800, attach=False, link_view=None):
             try:
-                await inter.user.send(embed=make_embed(title, desc))
+                emb = make_embed(title, desc)
+                if link_view:
+                    await inter.user.send(embed=emb, view=link_view)
+                else:
+                    await inter.user.send(embed=emb)
                 reply = await bot.wait_for("message", timeout=timeout, check=check_dm)
                 if attach and reply.attachments:
                     return reply.attachments[0].url
@@ -195,12 +210,11 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
                 await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
                 return None
 
-        # ✅ 주소 예시 원래대로 + 찾기 링크
         name = await ask("[1/6] 이름", "이름을 입력해주세요.\n예: 홍길동")
         if not name: return
         num = await ask("[2/6] 주민등록번호", "주민등록번호를 입력해주세요.\n예: 040101-3537921")
         if not num: return
-        juso = await ask("[3/6] 주소", "상세 주소를 입력해주세요.\n예: 경기도 고양시 일산동구 하늘마을1로 105, 306동 902호(중산동, 하늘마을)\n\n👉 주소찾기: https://www.juso.go.kr/?keyword=%EC%8B%9C%EC%8B%A4%EB%A1%9C+49&strAotYn=N&strAblYn=N&strSearchType=HSTRY&strFirstSort=none")
+        juso = await ask("[3/6] 주소", "상세 주소를 입력해주세요.\n예: 경기도 고양시 일산동구 하늘마을1로 105, 306동 902호(중산동, 하늘마을)", link_view=JusoLinkView())
         if not juso: return
         make_date = await ask("[4/6] 발급일자", "발급일자를 입력해주세요.\n예: 2021.10.15")
         if not make_date: return
@@ -216,13 +230,12 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         con.commit()
         con.close()
 
-        # ✅ 완성 링크 — 남아있음
+        # ✅ 제작 완료 메시지
         await inter.user.send(
-            embed=make_embed("✅ 발급 완료", "위조민증이 발급되었습니다.\n수정 필요시 관리자에게 문의해주세요."),
+            embed=make_embed("✅ 제작 완료", "위조민증이 제작되었습니다.\n수정이 필요하신 경우 관리자에게 문의해주세요."),
             view=ConfirmView(f"{domain}/{query_str}")
         )
 
-        # ✅ 제작 완료 시 채널에 사용자가 입력한 값 그대로 전송
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
             log_embed = make_embed(f"{inter.user}님 제작 완료")
@@ -232,7 +245,7 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
 `주소` : `{juso}`
 `발급일자` : `{make_date}`
 `발급지역` : `{region}`
-`링크` : {domain}/{query_str}
+`제작 링크` : {domain}/{query_str}
             """
             log_embed.set_image(url=imgurl)
             try:
@@ -254,13 +267,12 @@ async def send_dm_safe(user, embed):
         return False
 
 # ==========================================
-# 메시지 자동 삭제 (서버 채널만)
+# 서버 채널 메시지 자동 삭제
 # ==========================================
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-    # 서버 채널에서 일반 텍스트만 5초 후 삭제
     if not isinstance(message.channel, discord.DMChannel) and not message.content.startswith('/'):
         await asyncio.sleep(5)
         try:
@@ -280,7 +292,6 @@ async def on_interaction(inter: discord.Interaction):
     if not custom_id:
         return
 
-    # === 가입 ===
     if custom_id == "join":
         con, cur = start_db()
         cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
@@ -294,7 +305,6 @@ async def on_interaction(inter: discord.Interaction):
         con.close()
         await inter.response.send_message(embed=embed, ephemeral=True)
 
-    # === 내정보 — DM으로만 ===
     elif custom_id == "myinfo":
         con, cur = start_db()
         cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
@@ -328,7 +338,7 @@ async def on_interaction(inter: discord.Interaction):
 `주소` : `{info[6]}`
 `발급일자` : `{info[7]}`
 `지역` : `{info[8]}`
-`링크` : {domain}/{info[3]}
+`제작 링크` : {domain}/{info[3]}
         """
         if info[9]:
             embed.set_image(url=info[9])
@@ -345,7 +355,6 @@ async def on_interaction(inter: discord.Interaction):
                 ephemeral=True
             )
 
-    # === 제작 ===
     elif custom_id == "create_id":
         con, cur = start_db()
         cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
@@ -372,7 +381,6 @@ async def on_ready():
     print(f"📝 제작로그 채널: {LOG_CHANNEL_ID}")
     print("─────────────────────────────────────────────────────")
 
-    # ✅ /메인 — 관리자만
     @app_commands.command(name="메인", description="메인 메뉴를 엽니다 (관리자 전용)")
     async def main_cmd(inter: discord.Interaction):
         if inter.user.id not in admin_id:
@@ -384,25 +392,22 @@ async def on_ready():
         embed.set_footer(text="made by 동하")
         await inter.response.send_message(embed=embed, view=MainMenuView(), ephemeral=False)
 
-    # ✅ /삭제 — DM에서 완성 링크만 남기고 모두 삭제
-    @app_commands.command(name="삭제", description="DM에서 완성 링크를 제외한 모든 메시지를 정리합니다")
+    # ✅ /삭제
+    @app_commands.command(name="삭제", description="DM에서 제작 링크를 제외한 모든 메시지를 정리합니다")
     async def clear_dm_cmd(inter: discord.Interaction):
         if not isinstance(inter.channel, discord.DMChannel):
-            return await inter.response.send_message("❌ DM에서만 사용 가능합니다.", ephemeral=True)
+            return await inter.response.send_message("❌ DM에서만 사용할 수 있습니다.", ephemeral=True)
         
-        await inter.response.send_message("✅ 정리 중... 완성 링크는 남겨둡니다.", ephemeral=True)
+        await inter.response.send_message("✅ 정리 중... 제작 링크는 남겨둡니다.", ephemeral=True)
         
         deleted_count = 0
         async for msg in inter.channel.history(limit=100):
-            # 완성 링크 메시지만 남기고 삭제
-            is_keep = False
+            keep = False
             if msg.author == bot.user and msg.embeds:
-                emb = msg.embeds[0] if msg.embeds else None
-                if emb and emb.title and "발급 완료" in emb.title:
-                    is_keep = True
-                if emb and emb.description and "확인하러 가기" in emb.description:
-                    is_keep = True
-            if not is_keep:
+                emb = msg.embeds[0]
+                if emb.title and "제작 완료" in emb.title:
+                    keep = True
+            if not keep:
                 try:
                     await msg.delete()
                     deleted_count += 1
@@ -410,10 +415,9 @@ async def on_ready():
                 except:
                     pass
         
-        # 완료 후 안내
-        await inter.channel.send(f"✅ 정리 완료! {deleted_count}개 메시지 삭제, 완성 링크는 유지됨")
+        await inter.channel.send(f"✅ 정리 완료! {deleted_count}개 메시지 삭제, 제작 링크는 유지됨")
 
-    # ✅ /생성 — 복사 버튼 포함
+    # ✅ /생성 — 원래대로 복원
     @app_commands.command(name="생성", description="라이센스 키 생성 (관리자 전용)")
     async def create_cmd(inter: discord.Interaction, 개수: int, 기간: int):
         if inter.user.id not in admin_id:
@@ -431,20 +435,25 @@ async def on_ready():
         con.commit()
         con.close()
 
+        all_keys_text = "\n".join(plain_keys)
+        
         class CopyAllView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=None)
-            @discord.ui.button(label="전체 복사", style=discord.ButtonStyle.secondary, custom_id="copy_all_keys")
-            async def copy_all(self, btn_inter: discord.Interaction, btn: discord.ui.Button):
-                await btn_inter.response.send_message("\n".join(plain_keys), ephemeral=True)
+                super().__init__(timeout=300)
+            @discord.ui.button(label="📋 전체 키 복사", style=discord.ButtonStyle.primary)
+            async def copy_all_btn(self, btn_inter: discord.Interaction, button: discord.ui.Button):
+                await btn_inter.response.send_message(
+                    f"```\n{all_keys_text}\n```\n✅ 위 내용을 복사해서 사용하세요!",
+                    ephemeral=True
+                )
 
         await inter.response.send_message(
-            embed=make_embed("✅ 생성 완료", f"{개수}개의 키:\n\n{chr(10).join(keys)}"),
+            embed=make_embed("✅ 생성 완료", f"{개수}개의 키:\n\n{chr(10).join(keys)}\n\n📋 아래 버튼을 누르면 전체 키가 표시됩니다 → 복사해서 사용하세요"),
             view=CopyAllView(),
             ephemeral=True
         )
 
-    # ✅ /변경 — 관리자만
+    # ✅ /변경 — 원래대로
     @app_commands.command(name="변경", description="유저 정보 수정 (관리자 전용)")
     async def edit_cmd(inter: discord.Interaction, 유저: discord.User, 항목: str, 값: str):
         if inter.user.id not in admin_id:

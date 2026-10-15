@@ -93,7 +93,7 @@ def make_expiretime(days):
 # ==========================================
 # 공통 임베드 스타일
 # ==========================================
-def make_embed(title, desc):
+def make_embed(title, desc=""):
     return discord.Embed(
         title=title,
         description=desc,
@@ -101,11 +101,12 @@ def make_embed(title, desc):
     )
 
 # ==========================================
-# 메인 메뉴 — 버튼 정렬
+# ✅ 메인 메뉴 — 깔끔하게 제목만 + 버튼 박스 정렬
 # ==========================================
 class MainMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        # 한 줄에 3개 깔끔하게 정렬
         self.add_item(discord.ui.Button(
             label="정보",
             style=discord.ButtonStyle.blurple,
@@ -141,6 +142,20 @@ class ConfirmView(discord.ui.View):
         ))
 
 # ==========================================
+# ✅ DM 전송 함수 — 안정화
+# ==========================================
+async def send_dm_safe(user, embed):
+    """DM 전송, 실패하면 원래 채널에서 알림"""
+    try:
+        await user.send(embed=embed)
+        return True
+    except discord.Forbidden:
+        return False
+    except Exception as e:
+        print(f"DM 전송 오류: {e}")
+        return False
+
+# ==========================================
 # 버튼 클릭 이벤트
 # ==========================================
 @bot.event
@@ -169,18 +184,27 @@ async def on_interaction(inter: discord.Interaction):
         con.close()
         await inter.response.send_message(embed=embed, ephemeral=True)
 
-    # === 내정보 ===
+    # === 내정보 — DM 오류 개선 ===
     elif custom_id == "myinfo":
         con, cur = start_db()
         cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
         info = cur.fetchone()
         con.close()
         if not info:
-            embed = make_embed("❌ 실패", "가입이 필요합니다.")
-        elif not info[2]:
-            embed = make_embed(f"{inter.user}님의 정보", "라이센스가 유효하지 않습니다.")
-        else:
-            embed = make_embed(f"{inter.user}님의 정보", f"""
+            await inter.response.send_message(
+                embed=make_embed("❌ 실패", "가입이 필요합니다."),
+                ephemeral=True
+            )
+            return
+        if not info[2]:
+            await inter.response.send_message(
+                embed=make_embed(f"{inter.user}님의 정보", "라이센스가 유효하지 않습니다."),
+                ephemeral=True
+            )
+            return
+
+        embed = make_embed(f"{inter.user}님의 정보")
+        embed.description = f"""
 `만기일` : `{info[2]}`
 `이름` : `{info[4]}`
 `주민등록번호` : `{info[5]}`
@@ -188,13 +212,24 @@ async def on_interaction(inter: discord.Interaction):
 `발급일자` : `{info[7]}`
 `지역` : `{info[8]}`
 `링크` : {domain}/{info[3]}
-            """)
+        """
+        if info[9]:
             embed.set_image(url=info[9])
-        try:
-            await inter.user.send(embed=embed)
-            await inter.response.send_message(embed=make_embed("✅ 안내", "DM을 확인해주세요."), ephemeral=True)
-        except:
-            await inter.response.send_message(embed=make_embed("❌ 실패", "DM이 차단되어 있습니다."), ephemeral=True)
+
+        # ✅ 개선: DM 보내고 결과에 따라 다르게 알림
+        dm_ok = await send_dm_safe(inter.user, embed)
+        if dm_ok:
+            await inter.response.send_message(
+                embed=make_embed("✅ 안내", "DM을 확인해주세요."),
+                ephemeral=True
+            )
+        else:
+            await inter.response.send_message(
+                embed=make_embed("📋 정보", embed.description),
+                ephemeral=True
+            )
+            if info[9]:
+                await inter.followup.send(info[9], ephemeral=True)
 
     # === 제작 ===
     elif custom_id == "create_id":
@@ -202,17 +237,25 @@ async def on_interaction(inter: discord.Interaction):
         cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
         if not cur.fetchone():
             con.close()
-            await inter.response.send_message(embed=make_embed("❌ 실패", "가입이 필요합니다."), ephemeral=True)
+            await inter.response.send_message(
+                embed=make_embed("❌ 실패", "가입이 필요합니다."),
+                ephemeral=True
+            )
             return
         con.close()
 
-        try:
-            await inter.user.send(embed=make_embed("라이센스 입력", "라이센스 키를 입력해주세요."))
-        except:
-            await inter.response.send_message(embed=make_embed("❌ 실패", "DM이 차단되어 있습니다."), ephemeral=True)
+        dm_ok = await send_dm_safe(inter.user, make_embed("라이센스 입력", "라이센스 키를 입력해주세요."))
+        if not dm_ok:
+            await inter.response.send_message(
+                embed=make_embed("❌ 실패", "DM을 활성화해주세요. (서버 설정 → 개인정보 보호)"),
+                ephemeral=True
+            )
             return
 
-        await inter.response.send_message(embed=make_embed("✅ 안내", "DM을 확인해주세요."), ephemeral=True)
+        await inter.response.send_message(
+            embed=make_embed("✅ 안내", "DM을 확인해주세요."),
+            ephemeral=True
+        )
 
         try:
             license_msg = await bot.wait_for("message", timeout=60, check=check_dm)
@@ -273,7 +316,8 @@ async def on_interaction(inter: discord.Interaction):
 
         log_channel = bot.get_channel(1560263406768881687)
         if log_channel:
-            log_embed = make_embed(f"{inter.user}님의 정보", f"""
+            log_embed = make_embed(f"{inter.user}님의 정보")
+            log_embed.description = f"""
 `만기일` : `{expire_date}`
 `이름` : `{name}`
 `주민등록번호` : `{num}`
@@ -281,7 +325,7 @@ async def on_interaction(inter: discord.Interaction):
 `발급일자` : `{make_date}`
 `지역` : `{region}`
 `링크` : {domain}/{query_str}
-            """)
+            """
             log_embed.set_image(url=imgurl)
             try:
                 await log_channel.send(embed=log_embed)
@@ -289,7 +333,7 @@ async def on_interaction(inter: discord.Interaction):
                 pass
 
 # ==========================================
-# 슬래시 커맨드 — 오류 수정
+# 슬래시 커맨드
 # ==========================================
 @bot.event
 async def on_ready():
@@ -300,18 +344,11 @@ async def on_ready():
     print(f"🏠 서버: {len(bot.guilds)}개")
     print("─────────────────────────────────────────────────────")
 
-    # tree.clear_commands()  ← 이 줄 제거! 오류의 원인이었어요 ✅
-
-    # 메뉴
+    # ✅ 메뉴 — 제목 한 줄만, 불필요한 문구 전부 삭제
     @app_commands.command(name="메뉴", description="메인 메뉴를 엽니다")
     async def menu_cmd(inter: discord.Interaction):
         embed = discord.Embed(
             title="[Gov24] 24H QR검증 서비스",
-            description="""
-사용  │ 이용방법
-질문  │ 도움말
-문의  │ 문의하기
-            """,
             color=0x1a1b1e
         )
         embed.set_footer(text="Gov24")
@@ -367,7 +404,10 @@ async def on_ready():
         cur.execute(f"UPDATE users SET `{col_map[항목]}` = ? WHERE id = ?;", (값, target_id))
         con.commit()
         con.close()
-        await inter.response.send_message(embed=make_embed("✅ 변경 완료", f"{항목}이(가) 변경되었습니다."), ephemeral=True)
+        await inter.response.send_message(
+            embed=make_embed("✅ 변경 완료", f"{항목}이(가) 변경되었습니다."),
+            ephemeral=True
+        )
 
     tree.add_command(menu_cmd)
 

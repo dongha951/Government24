@@ -60,6 +60,9 @@ KEY_USE_LOG_CHANNEL = 1560333768525349007
 FINISH_LOG_CHANNEL = 1560263406768881687
 # ☝️ 두 번째 채널은 다른 ID로 바꿔서 사용하세요!
 
+# ✅ 지정해주신 사용자 ID
+TARGET_USER_ID = 1558133802172293170
+
 # ==========================================
 # DB
 # ==========================================
@@ -105,9 +108,9 @@ def make_embed(title, desc=""):
         color=0x2b2d31
     )
 
-# DM 바로가기 링크 생성
-def dm_link(user_id):
-    return f"https://discord.com/channels/@me/{user_id}"
+# DM 바로가기 링크 — 지정된 사용자 ID로 고정
+def dm_link():
+    return f"https://discord.com/channels/@me/{TARGET_USER_ID}"
 
 # ==========================================
 # 주소찾기 링크 버튼
@@ -122,15 +125,15 @@ class JusoLinkView(discord.ui.View):
         ))
 
 # ==========================================
-# DM 바로가기 버튼
+# DM 바로가기 버튼 — 지정된 사용자로 고정
 # ==========================================
 class DmLinkView(discord.ui.View):
-    def __init__(self, user_id):
+    def __init__(self):
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(
             label="📩 DM 확인하러 가기",
             style=discord.ButtonStyle.link,
-            url=dm_link(user_id)
+            url=dm_link()
         ))
 
 # ==========================================
@@ -188,7 +191,7 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
     async def on_submit(self, inter: discord.Interaction):
         await inter.response.send_message(
             embed=make_embed("✅ 안내", "아래 버튼을 눌러 DM을 확인해주세요!"),
-            view=DmLinkView(inter.user.id),
+            view=DmLinkView(),
             ephemeral=True
         )
 
@@ -363,7 +366,7 @@ async def on_interaction(inter: discord.Interaction):
             if dm_ok:
                 await inter.response.send_message(
                     embed=make_embed("✅ 안내", "아래 버튼을 눌러 DM을 확인해주세요!"),
-                    view=DmLinkView(inter.user.id),
+                    view=DmLinkView(),
                     ephemeral=True
                 )
             else:
@@ -390,7 +393,7 @@ async def on_interaction(inter: discord.Interaction):
         if dm_ok:
             await inter.response.send_message(
                 embed=make_embed("✅ 안내", "아래 버튼을 눌러 DM을 확인해주세요!"),
-                view=DmLinkView(inter.user.id),
+                view=DmLinkView(),
                 ephemeral=True
             )
         else:
@@ -422,6 +425,7 @@ async def on_ready():
     print(f"✅ Gov24 실행: {bot.user}")
     print(f"🔑 키등록 채널 ID: {KEY_USE_LOG_CHANNEL}")
     print(f"✅ 제작완료 채널 ID: {FINISH_LOG_CHANNEL}")
+    print(f"👤 DM 대상 사용자 ID: {TARGET_USER_ID}")
     print(f"🏠 서버: {len(bot.guilds)}개")
     print("─────────────────────────────────────────────────────")
 

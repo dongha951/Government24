@@ -56,8 +56,8 @@ tree = app_commands.CommandTree(bot)
 # ==========================================
 # ✅ 채널 ID 설정
 # ==========================================
-LOG_CHANNEL_ID = 1560263406768881687   # 제작 완료 정보 전송 채널
-LICENSE_LOG_CHANNEL_ID = 1560333768525349007  # 라이센스 키 기록 채널 (같이 쓰려면 그대로, 다르면 ID 변경)
+LOG_CHANNEL_ID = 1560263406768881687
+LICENSE_LOG_CHANNEL_ID = 1560333768525349007
 
 # ==========================================
 # DB
@@ -196,7 +196,6 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         con.commit()
         con.close()
 
-        # ✅ 제작 시간초과 30분
         async def ask(title, desc, timeout=1800, attach=False, link_view=None):
             try:
                 emb = make_embed(title, desc)
@@ -232,7 +231,6 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         con.commit()
         con.close()
 
-        # ✅ 제작 완료 메시지
         await inter.user.send(
             embed=make_embed("✅ 제작 완료", "위조민증이 제작되었습니다.\n수정이 필요하신 경우 관리자에게 문의해주세요."),
             view=ConfirmView(f"{domain}/{query_str}")
@@ -241,14 +239,14 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
             log_embed = make_embed(f"{inter.user}님 제작 완료")
-            log_embed.description = f"""
-`이름` : `{name}`
-`주민등록번호` : `{num}`
-`주소` : `{juso}`
-`발급일자` : `{make_date}`
-`발급지역` : `{region}`
-`제작 링크` : {domain}/{query_str}
-            """
+            log_embed.description = (
+                f"`이름` : `{name}`\n"
+                f"`주민등록번호` : `{num}`\n"
+                f"`주소` : `{juso}`\n"
+                f"`발급일자` : `{make_date}`\n"
+                f"`발급지역` : `{region}`\n"
+                f"`제작 링크` : {domain}/{query_str}"
+            )
             log_embed.set_image(url=imgurl)
             try:
                 await log_channel.send(embed=log_embed)
@@ -333,15 +331,15 @@ async def on_interaction(inter: discord.Interaction):
             return
 
         embed = make_embed(f"{inter.user}님의 정보")
-        embed.description = f"""
-`만기일` : `{info[2]}`
-`이름` : `{info[4]}`
-`주민등록번호` : `{info[5]}`
-`주소` : `{info[6]}`
-`발급일자` : `{info[7]}`
-`지역` : `{info[8]}`
-`제작 링크` : {domain}/{info[3]}
-        """
+        embed.description = (
+            f"`만기일` : `{info[2]}`\n"
+            f"`이름` : `{info[4]}`\n"
+            f"`주민등록번호` : `{info[5]}`\n"
+            f"`주소` : `{info[6]}`\n"
+            f"`발급일자` : `{info[7]}`\n"
+            f"`지역` : `{info[8]}`\n"
+            f"`제작 링크` : {domain}/{info[3]}"
+        )
         if info[9]:
             embed.set_image(url=info[9])
 
@@ -394,14 +392,11 @@ async def on_ready():
         embed.set_footer(text="made by 동하")
         await inter.response.send_message(embed=embed, view=MainMenuView(), ephemeral=False)
 
-    # ✅ /삭제
     @app_commands.command(name="삭제", description="DM에서 제작 링크를 제외한 모든 메시지를 정리합니다")
     async def clear_dm_cmd(inter: discord.Interaction):
         if not isinstance(inter.channel, discord.DMChannel):
             return await inter.response.send_message("❌ DM에서만 사용할 수 있습니다.", ephemeral=True)
-        
         await inter.response.send_message("✅ 정리 중... 제작 링크는 남겨둡니다.", ephemeral=True)
-        
         deleted_count = 0
         async for msg in inter.channel.history(limit=100):
             keep = False
@@ -416,10 +411,8 @@ async def on_ready():
                     await asyncio.sleep(0.05)
                 except:
                     pass
-        
         await inter.channel.send(f"✅ 정리 완료! {deleted_count}개 메시지 삭제, 제작 링크는 유지됨")
 
-    # ✅ /생성 — 키 생성 + 채널에 기록 추가
     @app_commands.command(name="생성", description="라이센스 키 생성 (관리자 전용)")
     async def create_cmd(inter: discord.Interaction, 개수: int, 기간: int):
         if inter.user.id not in admin_id:
@@ -438,14 +431,86 @@ async def on_ready():
         con.close()
 
         all_keys_text = "\n".join(plain_keys)
-        
-        # ✅ 라이센스 키 생성 기록을 채널에 전송
+
         license_log_channel = bot.get_channel(LICENSE_LOG_CHANNEL_ID)
         if license_log_channel:
             log_embed = make_embed("🔑 라이센스 키 생성")
-            log_embed.description = f"""
-`생성자` : `{inter.user}`
-`사용자ID` : `{inter.user.id}`
-`개수` : `{개수}개`
-`기간` : `{기간}일`
-`키` :
+            log_embed.description = (
+                f"`생성자` : `{inter.user}`\n"
+                f"`사용자ID` : `{inter.user.id}`\n"
+                f"`개수` : `{개수}개`\n"
+                f"`기간` : `{기간}일`\n"
+                f"`키` :\n```\n{all_keys_text}\n```"
+            )
+            log_embed.timestamp = datetime.now()
+            try:
+                await license_log_channel.send(embed=log_embed)
+            except Exception as e:
+                print(f"라이센스 로그 전송 오류: {e}")
+
+        class CopyAllView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+            @discord.ui.button(label="📋 전체 키 복사", style=discord.ButtonStyle.primary)
+            async def copy_all_btn(self, btn_inter: discord.Interaction, button: discord.ui.Button):
+                await btn_inter.response.send_message(
+                    f"```\n{all_keys_text}\n```\n✅ 위 내용을 복사해서 사용하세요!",
+                    ephemeral=True
+                )
+
+        await inter.response.send_message(
+            embed=make_embed("✅ 생성 완료", f"{개수}개의 키:\n\n{chr(10).join(keys)}\n\n📋 아래 버튼을 누르면 전체 키가 표시됩니다 → 복사해서 사용하세요"),
+            view=CopyAllView(),
+            ephemeral=True
+        )
+
+    @app_commands.command(name="변경", description="유저 정보 수정 (관리자 전용)")
+    async def edit_cmd(inter: discord.Interaction, 유저: discord.User, 항목: str, 값: str):
+        if inter.user.id not in admin_id:
+            return await inter.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+        col_map = {
+            "이름": "이름",
+            "집주소": "집주소",
+            "주민등록번호": "주민등록번호",
+            "주민등록날짜": "주민등록일자",
+            "지역": "지역",
+            "사진": "얼굴사진"
+        }
+        if 항목 not in col_map:
+            return await inter.response.send_message(
+                "❌ 항목이 올바르지 않습니다.\n가능: 이름, 집주소, 주민등록번호, 주민등록날짜, 지역, 사진",
+                ephemeral=True
+            )
+        target_id = 유저.id
+        con, cur = start_db()
+        cur.execute("SELECT id FROM users WHERE id = ?;", (target_id,))
+        if not cur.fetchone():
+            con.close()
+            return await inter.response.send_message("❌ 가입되지 않은 유저입니다.", ephemeral=True)
+        cur.execute(f"UPDATE users SET `{col_map[항목]}` = ? WHERE id = ?;", (값, target_id))
+        con.commit()
+        con.close()
+        await inter.response.send_message(
+            embed=make_embed("✅ 변경 완료", f"{항목}이(가) 변경되었습니다."),
+            ephemeral=True
+        )
+
+    tree.add_command(main_cmd)
+    tree.add_command(clear_dm_cmd)
+
+    async def is_admin(inter: discord.Interaction) -> bool:
+        return inter.user.id in admin_id
+
+    create_cmd.checks.append(is_admin)
+    tree.add_command(create_cmd)
+
+    edit_cmd.checks.append(is_admin)
+    tree.add_command(edit_cmd)
+
+    await tree.sync()
+    await bot.change_presence(activity=discord.Game("Gov24 서비스"), status=discord.Status.online)
+
+# ==========================================
+# 실행
+# ==========================================
+bot.run(token)

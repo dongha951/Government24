@@ -1,5 +1,3 @@
-#!/bin/bash
-set -e
-pip install --upgrade pip
-pip install -r requirements.txt
-echo "✅ 설치 완료"
+git add build.sh
+git commit -m "Add build.sh"
+git push

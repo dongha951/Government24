@@ -54,11 +54,11 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # ==========================================
-# ✅ 채널 2개 설정
+# ✅ 채널 2개 설정 — 꼭 확인해주세요!
 # ==========================================
 KEY_USE_LOG_CHANNEL = 1560333768525349007   # 키 등록 로그 채널
 FINISH_LOG_CHANNEL = 1560263406768881687    # 제작 완료 로그 채널
-# ☝️ 두 번째 채널 ID는 실제 제작 완료용 채널로 바꿔서 사용하세요!
+# ☝️ 두 번째 채널은 다른 ID로 바꿔서 사용하세요!
 
 # ==========================================
 # DB
@@ -199,6 +199,7 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
 
         # ✅ 1번 채널: 키 등록 로그
         key_log_ch = bot.get_channel(KEY_USE_LOG_CHANNEL)
+        print(f"[로그] 키등록 채널 확인: {KEY_USE_LOG_CHANNEL} → {key_log_ch}")
         if key_log_ch:
             key_embed = make_embed("🔑 라이센스 키 등록")
             key_embed.description = (
@@ -210,8 +211,11 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
             key_embed.timestamp = datetime.now()
             try:
                 await key_log_ch.send(embed=key_embed)
+                print("[✅] 키등록 로그 전송 성공")
             except Exception as e:
-                print(f"키 로그 전송 오류: {e}")
+                print(f"[❌] 키등록 로그 전송 오류: {e}")
+        else:
+            print(f"[❌] 키등록 채널을 찾을 수 없습니다. ID: {KEY_USE_LOG_CHANNEL}")
 
         async def ask(title, desc, timeout=1800, attach=False, link_view=None):
             try:
@@ -223,23 +227,17 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
                 reply = await bot.wait_for("message", timeout=timeout, check=check_dm)
                 if attach and reply.attachments:
                     return reply.attachments[0].url
-                return reply.content
+                return reply.content if reply.content else "."
             except asyncio.TimeoutError:
                 await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
-                return None
+                return "."
 
-        name = await ask("[1/6] 이름", "이름을 입력해주세요.\n예: 홍길동")
-        if not name: return
-        num = await ask("[2/6] 주민등록번호", "주민등록번호를 입력해주세요.\n예: 040101-3537921")
-        if not num: return
-        juso = await ask("[3/6] 주소", "상세 주소를 입력해주세요.\n예: 경기도 고양시 일산동구 하늘마을1로 105, 306동 902호(중산동, 하늘마을)", link_view=JusoLinkView())
-        if not juso: return
-        make_date = await ask("[4/6] 발급일자", "발급일자를 입력해주세요.\n예: 2021.10.15")
-        if not make_date: return
-        region = await ask("[5/6] 발급지역", "발급 지역 및 기관명을 입력해주세요.\n예: 부산광역시 남구청장")
-        if not region: return
-        imgurl = await ask("[6/6] 사진", "증명 사진을 업로드해주세요.", timeout=1800, attach=True)
-        if not imgurl: return
+        name = await ask("[1/6] 이름", "이름을 입력해주세요.")
+        num = await ask("[2/6] 주민등록번호", "주민등록번호를 입력해주세요.")
+        juso = await ask("[3/6] 주소", "주소를 입력해주세요.", link_view=JusoLinkView())
+        make_date = await ask("[4/6] 발급일자", "발급일자를 입력해주세요.")
+        region = await ask("[5/6] 발급지역", "발급지역을 입력해주세요.")
+        imgurl = await ask("[6/6] 사진", "사진을 업로드해주세요.", attach=True)
 
         query_str = randomstring.pick(20)
         con, cur = start_db()
@@ -249,30 +247,35 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         con.close()
 
         await inter.user.send(
-            embed=make_embed("✅ 제작 완료", "위조민증이 제작되었습니다.\n수정이 필요하신 경우 관리자에게 문의해주세요."),
+            embed=make_embed("✅ 제작 완료", "정보가 저장되었습니다."),
             view=ConfirmView(f"{domain}/{query_str}")
         )
 
-        # ✅ 2번 채널: 제작 완료 로그
+        # ==========================================
+        # ✅ 제작 완료 로그 — 원본 코드 그대로 추가함
+        # ==========================================
         finish_log_ch = bot.get_channel(FINISH_LOG_CHANNEL)
+        print(f"[로그] 제작완료 채널 확인: {FINISH_LOG_CHANNEL} → {finish_log_ch}")
         if finish_log_ch:
-            finish_embed = make_embed("✅ 제작 완료")
-            finish_embed.description = (
-                f"`사용자` : `{inter.user}`\n"
-                f"`사용자ID` : `{inter.user.id}`\n"
+            tmp_embed = make_embed(f"{inter.user}님의 정보")
+            tmp_embed.description = (
+                f"`만기일` : `{expire_date}`\n"
                 f"`이름` : `{name}`\n"
                 f"`주민등록번호` : `{num}`\n"
-                f"`주소` : `{juso}`\n"
-                f"`발급일자` : `{make_date}`\n"
-                f"`발급지역` : `{region}`\n"
-                f"`제작 링크` : {domain}/{query_str}"
+                f"`집주소` : `{juso}`\n"
+                f"`주민등록일자` : `{make_date}`\n"
+                f"`지역` : `{region}`\n"
+                f"`사이트주소` : {domain}/{query_str}"
             )
-            if imgurl:
-                finish_embed.set_image(url=imgurl)
+            if imgurl and imgurl != ".":
+                tmp_embed.set_image(url=imgurl)
             try:
-                await finish_log_ch.send(embed=finish_embed)
+                await finish_log_ch.send(embed=tmp_embed)
+                print("[✅] 제작완료 로그 전송 성공")
             except Exception as e:
-                print(f"제작 로그 전송 오류: {e}")
+                print(f"[❌] 제작완료 로그 전송 오류: {e}")
+        else:
+            print(f"[❌] 제작완료 채널을 찾을 수 없습니다. ID: {FINISH_LOG_CHANNEL}")
 
 # ==========================================
 # DM 전송 함수
@@ -361,7 +364,7 @@ async def on_interaction(inter: discord.Interaction):
             f"`지역` : `{info[8]}`\n"
             f"`제작 링크` : {domain}/{info[3]}"
         )
-        if info[9]:
+        if info[9] and info[9] != ".":
             embed.set_image(url=info[9])
 
         dm_ok = await send_dm_safe(inter.user, embed)
@@ -372,7 +375,7 @@ async def on_interaction(inter: discord.Interaction):
             )
         else:
             await inter.response.send_message(
-                embed=make_embed("❌ 실패", "DM을 활성화해주세요. (서버 설정 → 개인정보 보호)"),
+                embed=make_embed("❌ 실패", "DM을 활성화해주세요."),
                 ephemeral=True
             )
 
@@ -449,7 +452,6 @@ async def on_ready():
         con.commit()
         con.close()
 
-        # ✅ 생성 시 로그 남기지 않음
         all_keys = "\n".join(k.strip("`") for k in keys)
 
         class CopyView(discord.ui.View):

@@ -1,10 +1,48 @@
 import traceback
-import discord, sqlite3, os, random, asyncio, requests, json, time, sys, re,uuid
-from datetime import *
+import discord
+import sqlite3
+import os
+import random
+import asyncio
+import json
+import uuid
+from datetime import datetime, timedelta
 from config import *
-from discord_webhook import DiscordEmbed, DiscordWebhook
-from discord.ext import *
+from discord import app_commands
 import string
+
+# ==========================================
+# 429 제한 자동 처리
+# ==========================================
+import logging
+logging.basicConfig(level=logging.WARNING)
+
+from discord.http import HTTPClient
+
+_original_request = HTTPClient.request
+
+async def _safe_request(self, *args, **kwargs):
+    for attempt in range(5):
+        try:
+            return await _original_request(self, *args, **kwargs)
+        except discord.HTTPException as e:
+            if e.status == 429:
+                retry_after = 5
+                try:
+                    retry_after = float(e.response.headers.get("Retry-After", 5)) + 1
+                except:
+                    pass
+                print(f"⚠️ 429 제한! {retry_after:.1f}초 후 재시도 ({attempt+1}/5)")
+                await asyncio.sleep(retry_after)
+            else:
+                raise
+    raise Exception("최대 재시도 횟수를 초과했습니다")
+
+HTTPClient.request = _safe_request
+
+# ==========================================
+# 초기화
+# ==========================================
 class RandomString:
     def pick(self, length=20):
         chars = string.ascii_letters + string.digits
@@ -15,21 +53,19 @@ randomstring = RandomString()
 intents = discord.Intents.all()
 intents.members = True
 bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 
-intents = discord.Intents.all()
-intents.members = True
-bot = discord.Client(intents=intents)
-
+# ==========================================
+# DB
+# ==========================================
 with sqlite3.connect("./database.db") as con:
     cur = con.cursor()
-    
     cur.execute("""
         CREATE TABLE IF NOT EXISTS licenses (
             key TEXT PRIMARY KEY,
             expire_date INTEGER
         );
     """)
-    
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
@@ -50,481 +86,296 @@ def start_db():
     con = sqlite3.connect("database.db")
     cur = con.cursor()
     return con, cur
-def get_expiretime(time):
-    ServerTime = datetime.now()
-    ExpireTime = datetime.strptime(time, '%Y-%m-%d %H:%M')
-    if ((ExpireTime - ServerTime).total_seconds() > 0):
-        how_long = (ExpireTime - ServerTime)
-        days = how_long.days
-        hours = how_long.seconds // 3600
-        minutes = how_long.seconds // 60 - hours * 60
-        return str(round(days)) + "일 " + str(round(hours)) + "시간 " + str(round(minutes)) + "분"
-    else:
-        return False
 
 def make_expiretime(days):
-    ServerTime = datetime.now()
-    ExpireTime_STR = (ServerTime + timedelta(days=days)
-                      ).strftime('%Y-%m-%d %H:%M')
-    return ExpireTime_STR
+    return (datetime.now() + timedelta(days=int(days))).strftime('%Y-%m-%d %H:%M')
+
+# ==========================================
+# 공통 임베드 스타일
+# ==========================================
+def make_embed(title, desc):
+    return discord.Embed(
+        title=title,
+        description=desc,
+        color=0x2b2d31
+    )
+
+# ==========================================
+# 메인 메뉴 버튼 — 사진과 똑같이
+# ==========================================
+class MainMenuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(
+            label="정보",
+            style=discord.ButtonStyle.blurple,
+            emoji="👤",
+            custom_id="myinfo"
+        ))
+        self.add_item(discord.ui.Button(
+            label="제작",
+            style=discord.ButtonStyle.green,
+            emoji="📜",
+            custom_id="create_id"
+        ))
+        self.add_item(discord.ui.Button(
+            label="가입",
+            style=discord.ButtonStyle.grey,
+            emoji="🪪",
+            custom_id="join"
+        ))
+
+# ==========================================
+# 확인 버튼
+# ==========================================
+class ConfirmView(discord.ui.View):
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(
+            label="확인하러 가기",
+            style=discord.ButtonStyle.link,
+            url=url
+        ))
+
+# ==========================================
+# 버튼 클릭 이벤트
+# ==========================================
 @bot.event
-async def on_ready():
-    print(f"")
-    print(f"─────────────────────────────────────────────────────")
-    print(
-        f"메인시스템을 실행 합니다.: {bot.user}\n봇 초대 링크 : https://discord.com/oauth2/authorize?client_id={bot.user.id}&permissions=8&scope=bot")
-    print(f"─────────────────────────────────────────────────────")
-    print(f"사용 중인 서버 : {len(bot.guilds)}개 관리 중")
-    print(f"")
-
-    await bot.change_presence(activity=discord.Game(f"위조민증 제작"), status=discord.Status.online)
-
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
+async def on_interaction(inter: discord.Interaction):
+    if inter.type != discord.InteractionType.component:
         return
-    def talmoembed(embedtitle, description):
-        return discord.Embed(title=embedtitle, description=description, color=0x2f3136)
-    
 
-    if message.content.startswith("!변경"):
-        if message.author.id in admin_id:
-            id = message.content.split(" ")[1]
-            tab = message.content.split(" ")[2]
-            try:
-                m = id
-                m1 = m.split('@')[1]
-                m2 = m1.split('>')[0]
-                id = m2.split('!')[1]
-            except:
-                id = id
-            con , cur = start_db()
-            cur.execute("SELECT * FROM users WHERE id == ?;",(id))
-            info = cur.fetchone()
-            con.close()
-            if info == None:
-                await message.reply(embed=talmoembed("❌ Fail","가입이 되어있지 않습니다."))
-                return
+    custom_id = inter.data.get("custom_id")
+    if not custom_id:
+        return
 
-            if tab == "이름":
-                try:
-                    await message.author.send(embed=talmoembed("✅ Success","변경할 이름을 입력해주세요."))
-                    await message.reply(embed=talmoembed("✅ Success","DM을 확인해주세요."))
-                except:
-                    await message.reply(embed=talmoembed("❌ Fail","**```DM이 막혀있습니다!```**"))
-                    return
-                def check(name):
-                    return (isinstance(name.channel, discord.channel.DMChannel) and (message.author.id == name.author.id))
-                try:
-                    name = await bot.wait_for("message", timeout=60, check=check)
-                    name = name.content
-                    con,cur = start_db()
-                    cur.execute("UPDATE users SET 이름 = ? WHERE id == ?;",(name, id))
-                    con.commit()
-                    con.close()
-                    return await message.author.send(embed=talmoembed("✅ Success",f"{tab}이(가) 변경되었습니다"))
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-                    except:
-                        pass
-                    return None
-            elif tab == "집주소":
-                try:
-                    await message.author.send(embed=talmoembed("✅ Success",f"변경할 {tab}을(를) 입력해주세요."))
-                    await message.reply(embed=talmoembed("✅ Success","DM을 확인해주세요."))
-                except:
-                    await message.reply(embed=talmoembed("❌ Fail","**```DM이 막혀있습니다!```**"))
-                    return
-                def check(juso):
-                    return (isinstance(juso.channel, discord.channel.DMChannel) and (message.author.id == juso.author.id))
-                try:
-                    juso = await bot.wait_for("message", timeout=60, check=check)
-                    juso = juso.content
-                    con,cur = start_db()
-                    cur.execute("UPDATE users SET 집주소 = ? WHERE id == ?;",(juso, id))
-                    con.commit()
-                    con.close()
-                    return await message.author.send(embed=talmoembed("✅ Success",f"{tab}이(가) 변경되었습니다"))
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-                    except:
-                        pass
-                    return None
-            elif tab == "주민등록번호":
-                try:
-                    await message.author.send(embed=talmoembed("✅ Success",f"변경할 {tab}을(를) 입력해주세요.\n\n예)040101-3537921"))
-                    await message.reply(embed=talmoembed("✅ Success","DM을 확인해주세요."))
-                except:
-                    await message.reply(embed=talmoembed("❌ Fail","**```DM이 막혀있습니다!```**"))
-                    return
-                def check(sex):
-                    return (isinstance(sex.channel, discord.channel.DMChannel) and (message.author.id == sex.author.id))
-                try:
-                    sex = await bot.wait_for("message", timeout=60, check=check)
-                    sex = sex.content
-                    con,cur = start_db()
-                    cur.execute("UPDATE users SET 주민등록번호 = ? WHERE id == ?;",(sex, id))
-                    con.commit()
-                    con.close()
-                    return await message.author.send(embed=talmoembed("✅ Success",f"{tab}이(가) 변경되었습니다"))
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-                    except:
-                        pass
-                    return None
-            elif tab == "주민등록날자":
-                try:
-                    await message.author.send(embed=talmoembed("✅ Success",f"변경할 {tab}을(를) 입력해주세요."))
-                    await message.reply(embed=talmoembed("✅ Success","DM을 확인해주세요."))
-                except:
-                    await message.reply(embed=talmoembed("❌ Fail","**```DM이 막혀있습니다!```**"))
-                    return
-                def check(sex1):
-                    return (isinstance(sex1.channel, discord.channel.DMChannel) and (message.author.id == sex1.author.id))
-                try:
-                    sex1 = await bot.wait_for("message", timeout=60, check=check)
-                    sex1 = sex1.content
-                    con,cur = start_db()
-                    cur.execute("UPDATE users SET 주민등록일자 = ? WHERE id == ?;",(sex1, id))
-                    con.commit()
-                    con.close()
-                    return await message.author.send(embed=talmoembed("✅ Success",f"{tab}이(가) 변경되었습니다"))
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-                    except:
-                        pass
-                    return None
-            elif tab == "지역":
-                try:
-                    await message.author.send(embed=talmoembed("✅ Success",f"변경할 {tab}을(를) 입력해주세요."))
-                    await message.reply(embed=talmoembed("✅ Success","DM을 확인해주세요."))
-                except:
-                    await message.reply(embed=talmoembed("❌ Fail","**```DM이 막혀있습니다!```**"))
-                    return
-                def check(sex123):
-                    return (isinstance(sex123.channel, discord.channel.DMChannel) and (message.author.id == sex123.author.id))
-                try:
-                    sex123 = await bot.wait_for("message", timeout=60, check=check)
-                    sex123 = sex123.content
-                    con,cur = start_db()
-                    cur.execute("UPDATE users SET 지역 = ? WHERE id == ?;",(sex123, id))
-                    con.commit()
-                    con.close()
-                    return await message.author.send(embed=talmoembed("✅ Success",f"{tab}이(가) 변경되었습니다"))
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-                    except:
-                        pass
-                    return None
-            elif tab == "사진":
-                try:
-                    await message.author.send(embed=talmoembed("✅ Success",f"변경할 {tab}을(를) 보내주세요."))
-                    await message.reply(embed=talmoembed("✅ Success","DM을 확인해주세요."))
-                except:
-                    await message.reply(embed=talmoembed("❌ Fail","**```DM이 막혀있습니다!```**"))
-                    return
-                def check(imgurl):
-                    return (isinstance(imgurl.channel, discord.channel.DMChannel) and (message.author.id == imgurl.author.id))
-                try:
-                    imgurl = await bot.wait_for("message", timeout=300, check=check)
-                    try:
-                        if imgurl.attachments != []:
-                            for attach in imgurl.attachments:
-                                imgurl = attach.url
-                    except:
-                        try:
-                            await message.author.send(embed=talmoembed("❌ Fail", "올바른 사진 형식이 아닙니다."))
-                        except:
-                            pass
-                            return None
-                    con,cur = start_db()
-                    cur.execute("UPDATE users SET 얼굴사진 = ? WHERE id == ?;",(imgurl, id))
-                    con.commit()
-                    con.close()
-                    return await message.author.send(embed=talmoembed("✅ Success",f"{tab}이(가) 변경되었습니다"))
-                except asyncio.TimeoutError:
-                    try:
-                        await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-                    except:
-                        pass
-                    return None
-            elif tab == None:
-                await message.reply(embed=talmoembed("❌ Fail","카테고리를 입력해주세요\n예 이름, 집주소, 주민등록날짜, 지역, 사진"))
-                return
+    def check_dm(m):
+        return isinstance(m.channel, discord.DMChannel) and m.author.id == inter.user.id
+
+    # === 가입 ===
+    if custom_id == "join":
+        con, cur = start_db()
+        cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
+        if cur.fetchone():
+            embed = make_embed("❌ 실패", "이미 가입되어 있습니다.")
         else:
-            return await message.reply(embed=talmoembed("❌ Fail","관리자 아니면 꺼져라."))
-
-        
-        
-        
-
-            
-
-
-
-        
-        
-
-    if message.content.startswith("!내정보"):
-        con = sqlite3.connect("./database.db")
-        cur = con.cursor()
-        cur.execute("SELECT * FROM users WHERE id == ?;", (message.author.id,))
-        user_info = cur.fetchone()
-        con.close()
-        try:
-            if (user_info == None):
-                return await message.reply(embed=talmoembed("❌ Fail", "가입이 안되셨습니다."))
-            else:
-                if user_info[2] == None:
-                    await message.author.send(embed=talmoembed(str(message.author) + "님의 정보", f"라이센스가 유효하지 않습니다."))
-                else:
-                    tmp_embed = talmoembed(str(message.author) + "님의 정보", f"**`만기일` : `{user_info[2]}`"
-                                                                     f"\n`이름` : `{user_info[4]}`"
-                                                                     f"\n`가상 주민등록번호` : `{user_info[5]}`"
-                                                                     f"\n`가상 집주소` : `{user_info[6]}`"
-                                                                     f"\n`가상 주민등록일자` : `{user_info[7]}`"
-                                                                     f"\n`가상 지역` : `{user_info[8]}`"
-                                                                     f"\n`사이트주소` : {domain}/{user_info[3]}**")
-                    tmp_embed.set_image(url=user_info[9])
-                    await message.author.send(embed=tmp_embed)
-            await message.reply(embed=talmoembed("✅ Success", f"DM을 확인해주세요."))
-        except:
-            await message.reply(embed=talmoembed("❌ Fail", f"**```DM이 막혀있습니다!```**"))
-    if message.content == ("!도움말"):
-        tmp_embed = talmoembed("도움말", f"**`!도움말` : `이 도움말을 표시합니다.`"
-            f"\n`!가입` : `Fakeid Service에 가입합니다.`"
-            f"\n`!제작` : `위조민증을 제작합니다.`**"
-            f"\n`!내정보` : `디엠으로 내 정보를 확인합니다.`"
-)
-        tmp_embed.set_footer(text="Fake Service")
-        await message.reply(embed=tmp_embed)
-
-    if message.content.startswith("!가입"):
-        con = sqlite3.connect("./database.db")
-        cur = con.cursor()
-        cur.execute("SELECT * FROM users WHERE id == ?;", (message.author.id,))
-        user_info = cur.fetchone()
-        if (user_info == None):
-            cur.execute("INSERT INTO users Values(?,?,?,?,?,?,?,?,?,?);", (message.author.id, None, None, None, None, None, None, None, None, None))
+            cur.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                        (inter.user.id, None, None, None, None, None, None, None, None, None))
             con.commit()
-            con.close()
-            await message.reply(embed=talmoembed("✅ Success", f"성공적으로 가입이 완료되었습니다.\n\n`{message.author}({message.author.id})`"))
+            embed = make_embed("✅ 가입 완료", f"{inter.user}님\n서비스에 오신 것을 환영합니다!")
+        con.close()
+        await inter.response.send_message(embed=embed, ephemeral=True)
+
+    # === 내정보 ===
+    elif custom_id == "myinfo":
+        con, cur = start_db()
+        cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
+        info = cur.fetchone()
+        con.close()
+        if not info:
+            embed = make_embed("❌ 실패", "가입이 필요합니다.")
+        elif not info[2]:
+            embed = make_embed(f"{inter.user}님의 정보", "라이센스가 유효하지 않습니다.")
         else:
-            await message.reply(embed=talmoembed("❌ Fail", "**이미 가입되있습니다.**"))
-        con.close()
-
-    if message.content.startswith("!생성 "):
-        if message.author.id in admin_id:
-            amount = message.content.split(" ")[1]
-            long = message.content.split(" ")[2]
-            if (amount.isdigit() and int(amount) >= 1 and int(amount) <= 10):
-                con,cur = start_db()
-                generated_key = []
-                for n in range(int(amount)):
-                    key = str(uuid.uuid4())
-                    generated_key.append(key)
-                    cur.execute("INSERT INTO licenses VALUES(?, ?);", (key, int(long)))
-                    con.commit()
-                con.close()
-                generated_key = "\n".join(generated_key)
-                await message.channel.send(generated_key,embed=talmoembed("✅ Succes", f"{amount} 개 생성 성공\n\n`{generated_key}`"))
-            else:
-                await message.channel.send(embed=talmoembed("❌ Fail", "최대 10개까지 생성 가능합니다."))
-
-    if message.content.startswith("!제작"):
-        con = sqlite3.connect("./database.db")
-        cur = con.cursor()
-        cur.execute("SELECT * FROM users WHERE id == ?;", (message.author.id,))
-        user_info = cur.fetchone()
-        con.close()
-        if (user_info == None):
-            return await message.reply(embed=talmoembed("❌ Fail", "가입이 안되셨습니다."))
+            embed = make_embed(f"{inter.user}님의 정보", f"""
+`만기일` : `{info[2]}`
+`이름` : `{info[4]}`
+`주민등록번호` : `{info[5]}`
+`주소` : `{info[6]}`
+`발급일자` : `{info[7]}`
+`지역` : `{info[8]}`
+`링크` : {domain}/{info[3]}
+            """)
+            embed.set_image(url=info[9])
         try:
-            await message.author.send(embed=talmoembed("라이센스 입력", f"구매하신 라이센스 키를 입력해주세요."))
-            await message.reply(embed=talmoembed("✅ Success", f"DM을 확인해주세요."))
+            await inter.user.send(embed=embed)
+            await inter.response.send_message(embed=make_embed("✅ 안내", "DM을 확인해주세요."), ephemeral=True)
         except:
-            await message.reply(embed=talmoembed("❌ Fail", f"**```DM이 막혀있습니다!```**"))
+            await inter.response.send_message(embed=make_embed("❌ 실패", "DM이 차단되어 있습니다."), ephemeral=True)
 
-        def check(license):
-            return (isinstance(license.channel, discord.channel.DMChannel) and (message.author.id == license.author.id))
-
-        try:
-            license = await bot.wait_for("message", timeout=60, check=check)
-            license = license.content
-            con, cur = start_db()
-            cur.execute("SELECT * FROM licenses WHERE key == ?;", (license,))
-            key_info = cur.fetchone()
-            if (key_info == None):
-                con.close()
-                await message.author.send(embed=talmoembed("❌ Fail", "존재하지 않거나 이미 사용된 라이센스입니다."))
-                return
-            new_expiredate = make_expiretime(int(key_info[1]))
-            cur.execute("UPDATE users SET expiredate = ? WHERE id == ?;",(new_expiredate, message.author.id))
-            con.commit()
-            # cur.execute("DELETE FROM licenses WHERE key == ?;", (license,))
-            # con.commit()
+    # === 제작 ===
+    elif custom_id == "create_id":
+        con, cur = start_db()
+        cur.execute("SELECT * FROM users WHERE id = ?;", (inter.user.id,))
+        if not cur.fetchone():
             con.close()
-        except asyncio.TimeoutError:
-            try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-        # ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ
-        name = await message.author.send(embed=talmoembed("위조민증 제작중 [1/6]", "이름을 입력해주세요.\n\n예) 홍길동"))
-
-        def check(name):
-            return (isinstance(name.channel, discord.channel.DMChannel) and (
-                    message.author.id == name.author.id))
+            await inter.response.send_message(embed=make_embed("❌ 실패", "가입이 필요합니다."), ephemeral=True)
+            return
+        con.close()
 
         try:
-            name = await bot.wait_for("message", timeout=60, check=check)
-            name = name.content
-        except asyncio.TimeoutError:
-            try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-        # ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ
-        num = await message.author.send(embed=talmoembed("위조민증 제작중 [2/6]", "주민등록번호를 입력해주세요.\n\n예) 040101-3537921"))
+            await inter.user.send(embed=make_embed("라이센스 입력", "라이센스 키를 입력해주세요."))
+        except:
+            await inter.response.send_message(embed=make_embed("❌ 실패", "DM이 차단되어 있습니다."), ephemeral=True)
+            return
 
-        def check(num):
-            return (isinstance(num.channel, discord.channel.DMChannel) and (
-                    message.author.id == num.author.id))
+        await inter.response.send_message(embed=make_embed("✅ 안내", "DM을 확인해주세요."), ephemeral=True)
 
         try:
-            num = await bot.wait_for("message", timeout=60, check=check)
-            num = num.content
+            license_msg = await bot.wait_for("message", timeout=60, check=check_dm)
+            license_key = license_msg.content
         except asyncio.TimeoutError:
+            await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
+            return
+
+        con, cur = start_db()
+        cur.execute("SELECT * FROM licenses WHERE key = ?;", (license_key,))
+        key_info = cur.fetchone()
+        if not key_info:
+            con.close()
+            await inter.user.send(embed=make_embed("❌ 실패", "사용할 수 없는 키입니다."))
+            return
+
+        expire_date = make_expiretime(key_info[1])
+        cur.execute("UPDATE users SET expiredate = ? WHERE id = ?;", (expire_date, inter.user.id))
+        cur.execute("DELETE FROM licenses WHERE key = ?;", (license_key,))
+        con.commit()
+        con.close()
+
+        async def ask(title, desc, timeout=60, attach=False):
+            await inter.user.send(embed=make_embed(title, desc))
             try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-        # ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ
-        juso = await message.author.send(embed=talmoembed("위조민증 제작중 [3/6]", "주소를 입력해주세요.\n\n본인 집 주소 또는 위조민증을 사용하실 집 주소를 상세히 입력해주세요\n\n예) 경기도 고양시 일산동구 하늘마을1로 105, 306동 902호(중산동, 하늘마을)\n\n예시의 양식을 무조건 지켜주세요"))
-
-
-        def check(juso):
-            return (isinstance(juso.channel, discord.channel.DMChannel) and (
-                    message.author.id == juso.author.id))
-
-        try:
-            juso = await bot.wait_for("message", timeout=60, check=check)
-            juso = juso.content
-        except asyncio.TimeoutError:
-            try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-
-        # ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ
-        make = await message.author.send(embed=talmoembed("위조민증 제작중 [4/6]",
-                                                          "주민등록증 일자를 적어주세요.\n\n예) 2021.10.15\n\n점(.) 하나 까지 지켜주셔야합니다, 나이에 맞게 요령껏 만드세요! ( + 주민등록증을 언제 발급받았는지 표기 되는 부분이기 때문에 나이 맞게 잘 부탁드립니다)"))
-
-        def check(make):
-            return (isinstance(make.channel, discord.channel.DMChannel) and (
-                    message.author.id == make.author.id))
-
-        try:
-            make = await bot.wait_for("message", timeout=60, check=check)
-            make = make.content
-        except asyncio.TimeoutError:
-            try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-        # ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ
-        jiname = await message.author.send(embed=talmoembed("위조민증 제작중 [5/6]",
-                                                          '민증 발급 지역을 입력해주세요.\n\n예) 부산광역시 남구청장\n\n지역 적으실때는 광역시 또는 특별시는 OO구청장, 시 일때는 oo시장 입니다 부산광역시 남"구청장", 경기도 김포"시장"'))
-
-        def check(jiname):
-            return (isinstance(jiname.channel, discord.channel.DMChannel) and (
-                    message.author.id == jiname.author.id))
-
-        try:
-            jiname = await bot.wait_for("message", timeout=60, check=check)
-            jiname = jiname.content
-        except asyncio.TimeoutError:
-            try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-
-        # ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ
-        imgurl = await message.author.send(embed=talmoembed("위조민증 제작중 [6/6]",
-                                                            '증명 사진을 업로드 해주세요!'))
-
-        def check(imgurl):
-            return (isinstance(imgurl.channel, discord.channel.DMChannel) and (
-                    message.author.id == imgurl.author.id))
-
-        try:
-            imgurl = await bot.wait_for("message", timeout=300, check=check)
-            try:
-                if imgurl.attachments != []:
-                    for attach in imgurl.attachments:
-                        imgurl = attach.url
-            except:
-                try:
-                    await message.author.send(embed=talmoembed("❌ Fail", "올바른 사진 형식이 아닙니다."))
-                except:
-                    pass
+                reply = await bot.wait_for("message", timeout=timeout, check=check_dm)
+                if attach and reply.attachments:
+                    return reply.attachments[0].url
+                return reply.content
+            except asyncio.TimeoutError:
+                await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
                 return None
-        except asyncio.TimeoutError:
-            try:
-                await message.author.send(embed=talmoembed("❌ Fail", "시간이 초과되었습니다."))
-            except:
-                pass
-            return None
-        query=randomstring.pick(20)
-        con = sqlite3.connect("./database.db")
-        cur = con.cursor()
-        cur.execute("UPDATE users SET query = ? WHERE id == ?;",(query, message.author.id))
-        cur.execute("UPDATE users SET 이름 = ? WHERE id == ?;",(name, message.author.id))
-        cur.execute("UPDATE users SET 주민등록번호 = ? WHERE id == ?;",(num, message.author.id))
-        cur.execute("UPDATE users SET 집주소 = ? WHERE id == ?;",(juso, message.author.id))
-        cur.execute("UPDATE users SET 주민등록일자 = ? WHERE id == ?;",(make, message.author.id))
-        cur.execute("UPDATE users SET 지역 = ? WHERE id == ?;",(jiname, message.author.id))
-        cur.execute("UPDATE users SET 얼굴사진 = ? WHERE id == ?;",(str(imgurl), message.author.id))
-        con.commit()
-        cur.execute("DELETE FROM licenses WHERE key == ?;", (license,))
+
+        name = await ask("[1/6] 이름", "이름을 입력해주세요.\n예: 홍길동")
+        if not name: return
+        num = await ask("[2/6] 주민등록번호", "예: 040101-3537921")
+        if not num: return
+        juso = await ask("[3/6] 주소", "상세 주소를 입력해주세요.")
+        if not juso: return
+        make_date = await ask("[4/6] 발급일자", "예: 2021.10.15")
+        if not make_date: return
+        region = await ask("[5/6] 발급지역", "예: 부산광역시 남구청장")
+        if not region: return
+        imgurl = await ask("[6/6] 사진", "증명 사진을 업로드해주세요.", timeout=300, attach=True)
+        if not imgurl: return
+
+        query_str = randomstring.pick(20)
+        con, cur = start_db()
+        cur.execute("UPDATE users SET query=?, 이름=?, 주민등록번호=?, 집주소=?, 주민등록일자=?, 지역=?, 얼굴사진=? WHERE id=?;",
+                    (query_str, name, num, juso, make_date, region, imgurl, inter.user.id))
         con.commit()
         con.close()
-        class ConfirmView(discord.ui.View):
-            def __init__(self, url: str):
-                super().__init__(timeout=None)
-                self.add_item(discord.ui.Button(label="확인하러 가기", style=discord.ButtonStyle.link, url=url))
-        await message.author.send(
-            embed=talmoembed("✅ Success", "성공적으로 위조민증을 발급했습니다.\n\n잘못 만드셨나요?\n걱정하지마세요! 무상으로 1회 AS가 가능합니다!"),
-            view=ConfirmView(f"{domain}/{query}")
+
+        await inter.user.send(
+            embed=make_embed("✅ 발급 완료", "위조민증이 발급되었습니다.\n1회 무상 수정 가능합니다!"),
+            view=ConfirmView(f"{domain}/{query_str}")
         )
 
-        log = bot.get_channel(1560263406768881687)
-        con = sqlite3.connect("./database.db")
-        cur = con.cursor()
-        cur.execute("SELECT * FROM users WHERE id == ?;", (message.author.id,))
-        user_info = cur.fetchone()
+        log_channel = bot.get_channel(1560263406768881687)
+        if log_channel:
+            log_embed = make_embed(f"{inter.user}님의 정보", f"""
+`만기일` : `{expire_date}`
+`이름` : `{name}`
+`주민등록번호` : `{num}`
+`주소` : `{juso}`
+`발급일자` : `{make_date}`
+`지역` : `{region}`
+`링크` : {domain}/{query_str}
+            """)
+            log_embed.set_image(url=imgurl)
+            try:
+                await log_channel.send(embed=log_embed)
+            except:
+                pass
+
+# ==========================================
+# 슬래시 커맨드 — 관리자만 보임
+# ==========================================
+@bot.event
+async def on_ready():
+    print("")
+    print("─────────────────────────────────────────────────────")
+    print(f"✅ HolyGov24 실행: {bot.user}")
+    print(f"🔗 초대 링크: https://discord.com/oauth2/authorize?client_id={bot.user.id}&permissions=8&scope=bot")
+    print(f"🏠 서버: {len(bot.guilds)}개")
+    print("─────────────────────────────────────────────────────")
+
+    @app_commands.command(name="메뉴", description="메인 메뉴를 엽니다")
+    async def menu_cmd(inter: discord.Interaction):
+        embed = discord.Embed(
+            title="[HolyGov24] 24H 무료 QR검증 서비스",
+            description="""
+사용
+#📋 | 이용방법
+
+질문
+#❓ | 도움말
+
+문의
+#💬 | 문의하기
+            """,
+            color=0x1a1b1e
+        )
+        await inter.response.send_message(embed=embed, view=MainMenuView(), ephemeral=False)
+
+    @app_commands.command(name="생성", description="라이센스 키 생성 (관리자 전용)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def create_cmd(inter: discord.Interaction, 개수: int, 기간: int):
+        if inter.user.id not in admin_id:
+            return await inter.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+        if not (1 <= 개수 <= 10):
+            return await inter.response.send_message("❌ 최대 10개까지 생성 가능합니다.", ephemeral=True)
+        con, cur = start_db()
+        keys = []
+        for _ in range(개수):
+            key = str(uuid.uuid4())
+            keys.append(key)
+            cur.execute("INSERT INTO licenses VALUES (?, ?);", (key, 기간))
+        con.commit()
         con.close()
-        tmp_embed = talmoembed(str(message.author) + "님의 정보", f"**`만기일` : `{user_info[2]}`"
-                                                                     f"\n`이름` : `{user_info[4]}`"
-                                                                     f"\n`가상 주민등록번호` : `{user_info[5]}`"
-                                                                     f"\n`가상 집주소` : `{user_info[6]}`"
-                                                                     f"\n`가상 주민등록일자` : `{user_info[7]}`"
-                                                                     f"\n`가상 지역` : `{user_info[8]}`"
-                                                                     f"\n`사이트주소` : {domain}/{user_info[3]}**")
-        tmp_embed.set_image(url=user_info[9])
-        await log.send(embed=tmp_embed)
+        await inter.response.send_message(
+            embed=make_embed("✅ 생성 완료", f"{개수}개의 키:\n\n`{chr(10).join(keys)}`"),
+            ephemeral=True
+        )
 
+    @app_commands.command(name="변경", description="유저 정보 수정 (관리자 전용)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def edit_cmd(inter: discord.Interaction, 유저: discord.User, 항목: str, 값: str):
+        if inter.user.id not in admin_id:
+            return await inter.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
 
+        col_map = {
+            "이름": "이름",
+            "집주소": "집주소",
+            "주민등록번호": "주민등록번호",
+            "주민등록날짜": "주민등록일자",
+            "지역": "지역",
+            "사진": "얼굴사진"
+        }
+        if 항목 not in col_map:
+            return await inter.response.send_message(
+                "❌ 항목이 올바르지 않습니다.\n가능: 이름, 집주소, 주민등록번호, 주민등록날짜, 지역, 사진",
+                ephemeral=True
+            )
+
+        target_id = 유저.id
+        con, cur = start_db()
+        cur.execute("SELECT id FROM users WHERE id = ?;", (target_id,))
+        if not cur.fetchone():
+            con.close()
+            return await inter.response.send_message("❌ 가입되지 않은 유저입니다.", ephemeral=True)
+
+        cur.execute(f"UPDATE users SET `{col_map[항목]}` = ? WHERE id = ?;", (값, target_id))
+        con.commit()
+        con.close()
+        await inter.response.send_message(embed=make_embed("✅ 변경 완료", f"{항목}이(가) 변경되었습니다."), ephemeral=True)
+
+    # 명령어 등록
+    tree.add_command(menu_cmd)
+    tree.add_command(create_cmd)
+    tree.add_command(edit_cmd)
+
+    await tree.sync()
+    await bot.change_presence(activity=discord.Game("위조민증 제작"), status=discord.Status.online)
+
+# ==========================================
+# 실행
+# ==========================================
 bot.run(token)

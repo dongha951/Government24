@@ -56,8 +56,8 @@ tree = app_commands.CommandTree(bot)
 # ==========================================
 # ✅ 채널 2개 설정 — 꼭 확인해주세요!
 # ==========================================
-KEY_USE_LOG_CHANNEL = 1560333768525349007   # 키 등록 로그 채널
-FINISH_LOG_CHANNEL = 1560263406768881687    # 제작 완료 로그 채널
+KEY_USE_LOG_CHANNEL = 1560333768525349007
+FINISH_LOG_CHANNEL = 1560263406768881687
 # ☝️ 두 번째 채널은 다른 ID로 바꿔서 사용하세요!
 
 # ==========================================
@@ -105,6 +105,10 @@ def make_embed(title, desc=""):
         color=0x2b2d31
     )
 
+# DM 바로가기 링크 생성
+def dm_link(user_id):
+    return f"https://discord.com/channels/@me/{user_id}"
+
 # ==========================================
 # 주소찾기 링크 버튼
 # ==========================================
@@ -115,6 +119,18 @@ class JusoLinkView(discord.ui.View):
             label="👉 주소찾기 바로가기",
             style=discord.ButtonStyle.link,
             url="https://www.juso.go.kr/"
+        ))
+
+# ==========================================
+# DM 바로가기 버튼
+# ==========================================
+class DmLinkView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(
+            label="📩 DM 확인하러 가기",
+            style=discord.ButtonStyle.link,
+            url=dm_link(user_id)
         ))
 
 # ==========================================
@@ -171,7 +187,8 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
 
     async def on_submit(self, inter: discord.Interaction):
         await inter.response.send_message(
-            embed=make_embed("✅ 안내", "DM을 확인해주세요."),
+            embed=make_embed("✅ 안내", "아래 버튼을 눌러 DM을 확인해주세요!"),
+            view=DmLinkView(inter.user.id),
             ephemeral=True
         )
 
@@ -232,12 +249,13 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
                 await inter.user.send(embed=make_embed("❌ 실패", "시간이 초과되었습니다."))
                 return "."
 
-        name = await ask("[1/6] 이름", "이름을 입력해주세요.")
-        num = await ask("[2/6] 주민등록번호", "주민등록번호를 입력해주세요.")
-        juso = await ask("[3/6] 주소", "주소를 입력해주세요.", link_view=JusoLinkView())
-        make_date = await ask("[4/6] 발급일자", "발급일자를 입력해주세요.")
-        region = await ask("[5/6] 발급지역", "발급지역을 입력해주세요.")
-        imgurl = await ask("[6/6] 사진", "사진을 업로드해주세요.", attach=True)
+        # ✅ 예시 문구 모두 복원!
+        name = await ask("[1/6] 이름", "이름을 입력해주세요.\n\n예) 홍길동")
+        num = await ask("[2/6] 주민등록번호", "주민등록번호를 입력해주세요.\n\n예) 040101-3537921")
+        juso = await ask("[3/6] 주소", "주소를 입력해주세요.\n\n본인 집 주소 또는 위조민증을 사용하실 집 주소를 상세히 입력해주세요\n\n예) 경기도 고양시 일산동구 하늘마을1로 105, 306동 902호(중산동, 하늘마을)\n\n예시의 양식을 무조건 지켜주세요", link_view=JusoLinkView())
+        make_date = await ask("[4/6] 발급일자", "주민등록증 일자를 적어주세요.\n\n예) 2021.10.15\n\n점(.) 하나 까지 지켜주셔야합니다, 나이에 맞게 요령껏 만드세요! ( + 주민등록증을 언제 발급받았는지 표기 되는 부분이기 때문에 나이 맞게 잘 부탁드립니다)")
+        region = await ask("[5/6] 발급지역", "민증 발급 지역을 입력해주세요.\n\n예) 부산광역시 남구청장\n\n지역 적으실때는 광역시 또는 특별시는 OO구청장, 시 일때는 oo시장 입니다 부산광역시 남\"구청장\", 경기도 김포\"시장\"")
+        imgurl = await ask("[6/6] 사진", "증명 사진을 업로드 해주세요!")
 
         query_str = randomstring.pick(20)
         con, cur = start_db()
@@ -247,12 +265,12 @@ class LicenseModal(discord.ui.Modal, title="라이센스 키 입력"):
         con.close()
 
         await inter.user.send(
-            embed=make_embed("✅ 제작 완료", "정보가 저장되었습니다."),
+            embed=make_embed("✅ 제작 완료", "성공적으로 위조민증을 발급했습니다.\n\n잘못 만드셨나요?\n걱정하지마세요! 무상으로 1회 AS가 가능합니다!"),
             view=ConfirmView(f"{domain}/{query_str}")
         )
 
         # ==========================================
-        # ✅ 제작 완료 로그 — 원본 코드 그대로 추가함
+        # ✅ 제작 완료 로그
         # ==========================================
         finish_log_ch = bot.get_channel(FINISH_LOG_CHANNEL)
         print(f"[로그] 제작완료 채널 확인: {FINISH_LOG_CHANNEL} → {finish_log_ch}")
@@ -344,7 +362,8 @@ async def on_interaction(inter: discord.Interaction):
             dm_ok = await send_dm_safe(inter.user, make_embed(f"{inter.user}님의 정보", "라이센스가 유효하지 않습니다."))
             if dm_ok:
                 await inter.response.send_message(
-                    embed=make_embed("✅ 안내", "DM을 확인해주세요."),
+                    embed=make_embed("✅ 안내", "아래 버튼을 눌러 DM을 확인해주세요!"),
+                    view=DmLinkView(inter.user.id),
                     ephemeral=True
                 )
             else:
@@ -370,7 +389,8 @@ async def on_interaction(inter: discord.Interaction):
         dm_ok = await send_dm_safe(inter.user, embed)
         if dm_ok:
             await inter.response.send_message(
-                embed=make_embed("✅ 안내", "DM을 확인해주세요."),
+                embed=make_embed("✅ 안내", "아래 버튼을 눌러 DM을 확인해주세요!"),
+                view=DmLinkView(inter.user.id),
                 ephemeral=True
             )
         else:
